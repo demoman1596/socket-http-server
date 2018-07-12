@@ -1,5 +1,8 @@
 import socket
 import sys
+import os
+import traceback
+import mimetypes
 
 def response_ok(body=b"This is a minimal response", mimetype=b"text/plain"):
     """
@@ -17,7 +20,30 @@ def response_ok(body=b"This is a minimal response", mimetype=b"text/plain"):
         <html><h1>Welcome:</h1></html>\r\n
         '''
     """
-    pass
+    return b"\r\n".join([
+        b"HTTP/1.1 200 OK",
+        b"Content-Type: " + mimetype,
+        b"",
+        body,
+    ])
+
+
+def response_method_not_allowed():
+    """Returns a 405 Method Not Allowed response"""
+    return b"\r\n".join([
+        b"HTTP/1.1 405 Method Not Allowed",
+        b"",
+        b"You can't do that on this server!",
+    ])
+
+
+def response_not_found():
+    """Returns a 404 Not Found response"""
+    return b"\r\n".join([
+        b"HTTP/1.1 404 Not Found",
+        b"",
+        b"Requested resource not found on this server.",
+    ])
 
 
 def parse_request(request):
@@ -27,18 +53,13 @@ def parse_request(request):
     This server only handles GET requests, so this method shall raise a
     NotImplementedError if the method of the request is not GET.
     """
-    pass
+    method, path, version = request.split("\r\n")[0].split(" ")
 
+    if method != "GET":
+        raise NotImplementedError
 
-def response_method_not_allowed():
-    """Returns a 405 Method Not Allowed response"""
-    pass
+    return path
 
-
-def response_not_found():
-    """Returns a 404 Not Found response"""
-    pass
-    
 
 def resolve_uri(uri):
     """
@@ -67,16 +88,23 @@ def resolve_uri(uri):
         resolve_uri('/a_page_that_doesnt_exist.html') -> Raises a NameError
 
     """
+    relative_path = "webroot" + uri
 
-    # TODO: Raise a NameError if the requested content is not present
-    # under webroot.
+    if os.path.isdir(relative_path):
+        content = b""
+        dirlist = os.listdir(relative_path)
+        for item in os.listdir(relative_path):
+            content += item.encode() + b"\r\n"
+        mime_type = b"text/plain"
+    elif os.path.isfile(relative_path):
+        content = b""
+        with open(relative_path, "rb") as binfile:
+            content = binfile.read()
+        mime_type = mimetypes.guess_type(uri)[0].encode()
+    else:
+        raise NameError
 
-    # TODO: Fill in the appropriate content and mime_type give the URI.
-    # See the assignment guidelines for help on "mapping mime-types", though
-    # you might need to create a special case for handling make_time.py
-    content = b"not implemented"
-    mime_type = b"not implemented"
-
+    print(mime_type)
     return content, mime_type
 
 
@@ -94,22 +122,37 @@ def server(log_buffer=sys.stderr):
             conn, addr = sock.accept()  # blocking
             try:
                 print('connection - {0}:{1}'.format(*addr), file=log_buffer)
+
+                request = ''
                 while True:
-                    data = conn.recv(16)
-                    print('received "{0}"'.format(data), file=log_buffer)
-                    if data:
-                        print('sending data back to client', file=log_buffer)
-                        conn.sendall(data)
-                    else:
-                        msg = 'no more data from {0}:{1}'.format(*addr)
-                        print(msg, log_buffer)
+                    data = conn.recv(1024)
+                    request += data.decode('utf8')
+
+                    if '\r\n\r\n' in request:
                         break
+
+                print("Request received:\n{}\n\n".format(request))
+
+                try:
+                    path = parse_request(request)
+                    body, mimetype = resolve_uri(path)
+                    response = response_ok(body, mimetype)
+                except NotImplementedError:
+                    response = response_method_not_allowed()
+                except NameError:
+                    response = response_not_found()
+
+                conn.sendall(response)
+            except:
+                traceback.print_exc()
             finally:
                 conn.close()
 
     except KeyboardInterrupt:
         sock.close()
         return
+    except:
+        traceback.print_exc()
 
 
 if __name__ == '__main__':
